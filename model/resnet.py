@@ -8,7 +8,7 @@ __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
 model_urls = {
     'resnet18': '/media/yang/1305D8BDB8D46DEE/zzz/A2Net-main/resnet18-5c106cde.pth',
     'resnet34': '/media/WD_2T/ZYJ/duomotai_test/resnet34-333f7ec4 .pth',
-    'resnet50': '/media/WD_2T/ZYJ/duomotai_test/resnet50-19c8e357.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
     'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
     'resnext50_32x4d': 'https://download.pytorch.org/models/resnext50_32x4d-7cdf4587.pth',
@@ -208,7 +208,11 @@ def _resnet(arch, block, layers, pretrained, **kwargs):
     model = ResNet(block, layers, **kwargs)
     if pretrained:
         print("loading the {} pretrained weight from local .....".format(arch))
-        state_dict = torch.load(model_urls[arch])
+        weight_path = model_urls[arch]
+        if weight_path.startswith(('http://', 'https://')):
+            state_dict = load_state_dict_from_url(weight_path, map_location='cpu')
+        else:
+            state_dict = torch.load(weight_path, map_location='cpu', weights_only=False)
         model.load_state_dict(state_dict)
     return model
 

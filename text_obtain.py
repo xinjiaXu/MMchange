@@ -1,55 +1,70 @@
-import os
-import torch
-import clip
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-import os
-
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+import argparse
 import json
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import os
+from pathlib import Path
 
-hf_path = ''
-model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True)
-model.cuda()
-config = model.config
-tokenizer = AutoTokenizer.from_pretrained(hf_path, use_fast=False,
-                                          model_max_length=config.tokenizer_model_max_length,
-                                          padding_side=config.tokenizer_padding_side)
-prompt = "What are these?"
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def obtain_image(img_path):
-    imgs = []
-    imgs_name = []
-    for root, dirs, files in os.walk(img_path):
-        for file in files:
-            if file.endswith(".jpg") or file.endswith(".jpeg") or file.endswith('.png'):
-                imgs_name.append(file)
-                imgs.append(os.path.join(root,file))
-    return imgs,imgs_name
+IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
 
-imgs_path = ""
-imgs, imgs_name = obtain_image(imgs_path)
 
-for i in range(len(imgs)):
-    output_text, genertaion_time = model.chat(prompt=prompt, image=imgs[i], tokenizer=tokenizer)
-    # 打开已存在的JSON文件，如果不存在则创建一个新的文件
-    with open("", "r+", encoding="utf-8") as file:
-        # 尝试读取文件中的现有数据
-        try:
-            data = json.load(file)
-        except json.JSONDecodeError:
-            # 如果文件为空或不是有效的JSON格式，创建一个空字典
-            data = {}
+def save_captions(captions, output_path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(output_path.suffix + '.tmp')
+    with temporary_path.open('w', encoding='utf-8') as output_file:
+        json.dump(captions, output_file, ensure_ascii=False)
+    os.replace(temporary_path, output_path)
 
-        # 向字典中添加新的键值对
-        data[imgs[i]] = output_text
 
-        # 将文件指针移回文件开头
-        file.seek(0)
-        # 清空文件内容
-        file.truncate()
-        # 将更新后的字典写回JSON文件
-        json.dump(data, file, ensure_ascii=False, indent=4)
+def generate(dataset_root, model_path, output_path, image_dir_a, image_dir_b, prompt):
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
+    model = model.to(device).eval()
+    config = model.config
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        use_fast=False,
+        model_max_length=config.tokenizer_model_max_length,
+        padding_side=config.tokenizer_padding_side,
+    )
 
+    if os.path.isfile(output_path):
+        with open(output_path, 'r', encoding='utf-8') as captions_file:
+            captions = json.load(captions_file)
+    else:
+        captions = {}
+
+    processed = 0
+    for split in ('train', 'val', 'test'):
+        for image_dir in (image_dir_a, image_dir_b):
+            folder = Path(dataset_root) / split / image_dir
+            for image_path in sorted(path for path in folder.iterdir()
+                                     if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES):
+                key = os.path.abspath(str(image_path))
+                if key in captions:
+                    continue
+                output_text, _ = model.chat(prompt=prompt, image=key, tokenizer=tokenizer)
+                captions[key] = output_text
+                processed += 1
+                if processed % 50 == 0:
+                    save_captions(captions, output_path)
+                    print(f'Generated {processed} new captions; total {len(captions)}')
+
+    save_captions(captions, output_path)
+    print(f'Saved {len(captions)} image captions to {output_path}')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate MMChange image descriptions with TinyLLaVA')
+    parser.add_argument('--dataset-root', required=True)
+    parser.add_argument('--model-path', required=True, help='Local TinyLLaVA model directory')
+    parser.add_argument('--output-json', required=True)
+    parser.add_argument('--image-dir-a', default='A')
+    parser.add_argument('--image-dir-b', default='B')
+    parser.add_argument('--prompt', default='What are these?')
+    args = parser.parse_args()
+    generate(args.dataset_root, args.model_path, args.output_json,
+             args.image_dir_a, args.image_dir_b, args.prompt)

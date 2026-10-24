@@ -20,19 +20,23 @@ import os, time
 import numpy as np
 from argparse import ArgumentParser
 import json
-from CLIP import clip
+try:
+    from CLIP import clip
+except ImportError:
+    import clip
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # 读取json文件
-with open('/media/WD_2T/ZYJ/315_cd_data/LEVIR_256/256/total1.json', 'r', encoding='utf-8') as file:
-    data = json.load(file)
-dictionary = dict(data)
-model_text_decode, preprocess = clip.load("ViT-B/32", device=device)
-from transformers import RobertaTokenizer, RobertaModel
-from transformers import logging
-logging.set_verbosity_warning()
+dictionary = {}
+model_text_decode = None
 
-robert_tokenizer = RobertaTokenizer.from_pretrained('/media/WD_2T/ZYJ/duomotai_test/roberta-base')
-robert_model = RobertaModel.from_pretrained('/media/WD_2T/ZYJ/duomotai_test/roberta-base')
+
+def get_text_features(image_names):
+    missing = [name for name in image_names if name not in dictionary]
+    if missing:
+        raise KeyError(f"Caption JSON is missing image key: {missing[0]}")
+    tokens = clip.tokenize([dictionary[name] for name in image_names]).to(device)
+    with torch.no_grad():
+        return model_text_decode.encode_text(tokens)
 def BCEDiceLoss(inputs, targets):
     # print(inputs.shape, targets.shape)
     bce = F.binary_cross_entropy(inputs, targets)
@@ -66,12 +70,8 @@ def val(args, val_loader, model, epoch):
         img, target, pre_image_name, post_image_name = batched_inputs
         pre_img = img[:, 0:3]
         post_img = img[:, 3:6]
-        output_text_A = [dictionary.get(img_name) for img_name in pre_image_name]
-        output_text_B = [dictionary.get(img_name) for img_name in post_image_name]
-        text_A = clip.tokenize([out_A for out_A in output_text_A]).to(device)
-        text_B = clip.tokenize([out_B for out_B in output_text_B]).to(device)
-        text_A_features = model_text_decode.encode_text(text_A)
-        text_B_features = model_text_decode.encode_text(text_B)
+        text_A_features = get_text_features(pre_image_name)
+        text_B_features = get_text_features(post_image_name)
         # text_A_features_list = []
         # for out_A in output_text_A:
         #     text_A = robert_tokenizer(out_A, return_tensors='pt')
@@ -151,13 +151,8 @@ def train(args, train_loader, model, optimizer, epoch, max_batches, cur_iter=0, 
         img, target , pre_image_name, post_image_name = batched_inputs
         pre_img = img[:, 0:3]
         post_img = img[:, 3:6]
-        output_text_A = [dictionary.get(img_name) for img_name in pre_image_name]
-        output_text_B = [dictionary.get(img_name) for img_name in post_image_name]
-
-        text_A = clip.tokenize([out_A for out_A in output_text_A]).to(device)
-        text_B = clip.tokenize([out_B for out_B in output_text_B]).to(device)
-        text_A_features = model_text_decode.encode_text(text_A)
-        text_B_features = model_text_decode.encode_text(text_B)
+        text_A_features = get_text_features(pre_image_name)
+        text_B_features = get_text_features(post_image_name)
         # text_A_features =[]
         # text_A_features_list = []
         # for out_A in output_text_A:
@@ -256,10 +251,14 @@ def trainValidateSegmentation(args):
 
     model = BaseNet(3, 1)
 
-    args.savedir = args.savedir + '_' + args.file_root + '_iter_' + str(args.max_steps) + '_lr_' + str(args.lr) + '/'
-    args.vis_dir = args.savedir + '/Vis/'
+    args.dataset_name = args.dataset_name or os.path.basename(os.path.normpath(args.dataset_root or args.file_root))
+    args.savedir = os.path.join(args.output_dir, args.dataset_name,
+                                f"{args.dataset_name}_iter_{args.max_steps}_lr_{args.lr}") + os.sep
+    args.vis_dir = os.path.join(args.savedir, 'Vis') + os.sep
 
-    if args.file_root == 'LEVIR':
+    if args.dataset_root:
+        args.file_root = args.dataset_root
+    elif args.file_root == 'LEVIR':
         args.file_root = '/media/WD_2T/ZYJ/315_cd_data/LEVIR_256/256（复件）'
     elif args.file_root == 'BCDD':
         args.file_root = '/home/guan/Documents/Datasets/ChangeDetection/BCDD'
@@ -306,7 +305,9 @@ def trainValidateSegmentation(args):
         myTransforms.ToTensor()
     ])
 
-    train_data = myDataLoader.Dataset("train", file_root=args.file_root, transform=trainDataset_main)
+    train_data = myDataLoader.Dataset("train", file_root=args.file_root, transform=trainDataset_main,
+                                     image_dir_a=args.image_dir_a, image_dir_b=args.image_dir_b,
+                                     label_dir=args.label_dir)
 
     trainLoader = torch.utils.data.DataLoader(
         train_data,
@@ -314,15 +315,29 @@ def trainValidateSegmentation(args):
         num_workers=args.num_workers, pin_memory=False, drop_last=True
     )
 
-    val_data = myDataLoader.Dataset("val", file_root=args.file_root, transform=valDataset)
+    val_data = myDataLoader.Dataset("val", file_root=args.file_root, transform=valDataset,
+                                   image_dir_a=args.image_dir_a, image_dir_b=args.image_dir_b,
+                                   label_dir=args.label_dir)
     valLoader = torch.utils.data.DataLoader(
         val_data, shuffle=False,
         batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=False)
 
-    test_data = myDataLoader.Dataset("test", file_root=args.file_root, transform=valDataset)
+    test_data = myDataLoader.Dataset("test", file_root=args.file_root, transform=valDataset,
+                                    image_dir_a=args.image_dir_a, image_dir_b=args.image_dir_b,
+                                    label_dir=args.label_dir)
     testLoader = torch.utils.data.DataLoader(
         test_data, shuffle=False,
         batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=False)
+
+    if args.mode == 'test':
+        if not args.test_checkpoint or not os.path.isfile(args.test_checkpoint):
+            raise FileNotFoundError(f"Test checkpoint not found: {args.test_checkpoint}")
+        checkpoint = torch.load(args.test_checkpoint, map_location=device, weights_only=False)
+        state_dict = checkpoint.get('state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        model.load_state_dict(state_dict)
+        _, test_scores = val(args, testLoader, model, 0)
+        print('Test metrics:', test_scores)
+        return
 
     # whether use multi-scale training
 
@@ -421,6 +436,13 @@ def trainValidateSegmentation(args):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--file_root', default="LEVIR", help='Data directory | LEVIR | BCDD | SYSU ')
+    parser.add_argument('--dataset-root', type=str, required=True)
+    parser.add_argument('--dataset-name', type=str, default=None)
+    parser.add_argument('--captions-json', type=str, required=True)
+    parser.add_argument('--clip-model', type=str, default='ViT-B/32')
+    parser.add_argument('--image-dir-a', type=str, default='A')
+    parser.add_argument('--image-dir-b', type=str, default='B')
+    parser.add_argument('--label-dir', type=str, default='label')
     parser.add_argument('--inWidth', type=int, default=256, help='Width of RGB image')
     parser.add_argument('--inHeight', type=int, default=256, help='Height of RGB image')
     parser.add_argument('--max_steps', type=int, default=40000, help='Max. number of iterations')
@@ -429,18 +451,26 @@ if __name__ == '__main__':
     parser.add_argument('--step_loss', type=int, default=100, help='Decrease learning rate after how many epochs')
     parser.add_argument('--lr', type=float, default=5e-4, help='Initial learning rate')
     parser.add_argument('--lr_mode', default='poly', help='Learning rate policy, step or poly')
-    parser.add_argument('--savedir', default='./results16', help='Directory to save the results')
+    parser.add_argument('--savedir', default='./results16', help='Legacy output directory prefix')
+    parser.add_argument('--output-dir', default='./MMchange_work_dirs', help='Directory to save the results')
+    parser.add_argument('--test-checkpoint', type=str, default=None)
     parser.add_argument('--resume', default=True, help='Use this checkpoint to continue training | '
                                                        './results_ep100/checkpoint.pth.tar')
     parser.add_argument('--logFile', default='trainValLog.txt',
                         help='File that stores the training and validation logs')
     parser.add_argument('--onGPU', default=True, type=lambda x: (str(x).lower() == 'true'),
                         help='Run on CPU or GPU. If TRUE, then GPU.')
+    parser.add_argument('--mode', choices=['train', 'test'], default='train')
     parser.add_argument('--weight', default='', type=str, help='pretrained weight, can be a non-strict copy')
     parser.add_argument('--ms', type=int, default=0, help='apply multi-scale training, default False')
 
     args = parser.parse_args()
     print('Called with args:')
     print(args)
+
+    with open(args.captions_json, 'r', encoding='utf-8') as captions_file:
+        dictionary = json.load(captions_file)
+    model_text_decode, preprocess = clip.load(args.clip_model, device=device)
+    model_text_decode.eval()
 
     trainValidateSegmentation(args)

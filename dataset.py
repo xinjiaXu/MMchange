@@ -1,24 +1,40 @@
 import cv2
+import os
 import numpy
 import torch.utils.data
 import json
 import torch
-from CLIP import clip
-device = "cuda" if torch.cuda.is_available() else "cpu"
 class Dataset(torch.utils.data.Dataset):
     '''
     Class to load the dataset
     '''
 
-    def __init__(self, dataset, file_root='data/', transform=None):
+    def __init__(self, dataset, file_root='data/', transform=None,
+                 image_dir_a='A', image_dir_b='B', label_dir='label', list_path=None):
         """
         dataset: dataset name, e.g. NJU2K_NLPR_train
         file_root: root of data_path, e.g. ./data/
         """
-        self.file_list = open(file_root + '/' + dataset + '/list/' + dataset + '.txt').read().splitlines()
-        self.pre_images = [file_root + '/' + dataset + '/A/' + x for x in self.file_list]
-        self.post_images = [file_root + '/' + dataset + '/B/' + x for x in self.file_list]
-        self.gts = [file_root + '/' + dataset + '/label/' + x for x in self.file_list]
+        file_root = os.path.abspath(file_root)
+        split_root = os.path.join(file_root, dataset)
+        if list_path is None:
+            candidates = [
+                os.path.join(split_root, 'list', dataset + '.txt'),
+                os.path.join(file_root, 'list', dataset + '.txt'),
+                os.path.join(file_root, dataset + '.txt'),
+                os.path.join(os.path.dirname(os.path.normpath(file_root)), dataset + '.txt'),
+            ]
+            list_path = next((path for path in candidates if os.path.isfile(path)), None)
+        if list_path:
+            with open(list_path, encoding='utf-8') as name_file:
+                self.file_list = [name.strip() for name in name_file if name.strip()]
+        else:
+            label_root = os.path.join(split_root, label_dir)
+            self.file_list = sorted(name for name in os.listdir(label_root) if not name.startswith('.'))
+
+        self.pre_images = [os.path.join(split_root, image_dir_a, x) for x in self.file_list]
+        self.post_images = [os.path.join(split_root, image_dir_b, x) for x in self.file_list]
+        self.gts = [os.path.join(split_root, label_dir, x) for x in self.file_list]
         self.transform = transform
 
     def __len__(self):
