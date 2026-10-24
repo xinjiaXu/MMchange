@@ -29,7 +29,7 @@ conda activate mmchange-rs
 bash prepare_server_data.sh /home/xxj/Data
 ```
 
-Setup installs PyTorch 2.7.1/CUDA 12.8, OpenAI CLIP, and Transformers 4.40.1; it also caches CLIP ViT-B/32 and the ResNet-50 ImageNet checkpoint. The TinyLLaVA model is separate: download/extract it using the link in the project README, then note its local directory for caption generation.
+Setup installs PyTorch 2.7.1/CUDA 12.8, OpenAI CLIP, and Transformers 4.40.1; it also caches CLIP ViT-B/32 and the ResNet-50 ImageNet checkpoint. The TinyLLaVA model is separate: download it from the [project's Quark link](https://pan.quark.cn/s/8e1a70eda144), extract it on the server, and use its directory for caption generation.
 
 ## Generate captions
 
